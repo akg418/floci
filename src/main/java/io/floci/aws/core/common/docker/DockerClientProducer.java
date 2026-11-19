@@ -426,6 +426,15 @@ public class DockerClientProducer {
         return seconds;
     }
 
+    /** 0 means the default, twice the CPUs Floci sees and at least 4; a negative value is a misconfiguration. */
+    static int validateMaxConcurrentLaunches(int value) {
+        if (value < 0) {
+            throw new IllegalArgumentException("floci.docker.max-concurrent-launches "
+                    + "(FLOCI_DOCKER_MAX_CONCURRENT_LAUNCHES) must be 0 or more, got: " + value);
+        }
+        return value;
+    }
+
     private static int requireAtLeastOne(int value, String setting, String envVar) {
         if (value < 1) {
             throw new IllegalArgumentException(setting + " (" + envVar + ") must be at least 1, got: " + value);
@@ -518,7 +527,17 @@ public class DockerClientProducer {
                 Duration.ofSeconds(validateConnectionRequestTimeoutSeconds(
                         config.docker().connectionRequestTimeoutSeconds())));
         gaugeLogger.register(role, transport::gauges);
-        return DockerClientImpl.getInstance(clientConfig, wrapForRole(transport, role, apiTimeout));
+        int launchSlots = "control-plane".equals(role)
+                ? LaunchBulkheadDockerHttpClient.resolveSize(
+                        validateMaxConcurrentLaunches(config.docker().maxConcurrentLaunches()),
+                        Runtime.getRuntime().availableProcessors())
+                : 0;
+        if (launchSlots > 0) {
+            LOG.infov("At most {0} container creates and starts run at once", launchSlots);
+        }
+        Duration launchWait = Duration.ofSeconds(config.docker().connectionRequestTimeoutSeconds());
+        return DockerClientImpl.getInstance(clientConfig,
+                wrapForRole(transport, role, apiTimeout, launchSlots, launchWait));
     }
 
     static FlociDockerHttpClient newHttpClient(DefaultDockerClientConfig clientConfig, int maxConnections,
@@ -543,6 +562,20 @@ public class DockerClientProducer {
      * silent daemon, not the length of each of its attempts.
      */
     static DockerHttpClient wrapForRole(DockerHttpClient transport, String role, Duration callTimeout) {
+        return wrapForRole(transport, role, callTimeout, 0, Duration.ZERO);
+    }
+
+    /**
+     * As {@link #wrapForRole(DockerHttpClient, String, Duration)}, with the control-plane transport's
+     * container creates and starts limited to {@code launchSlots} at once ({@link
+     * LaunchBulkheadDockerHttpClient}), each waiting up to {@code launchWait} for a slot. The bulkhead sits
+     * under the retry layer, so a backoff never holds a slot. 0 slots leaves launches unbounded.
+     */
+    static DockerHttpClient wrapForRole(DockerHttpClient transport, String role, Duration callTimeout,
+                                        int launchSlots, Duration launchWait) {
+        if (launchSlots > 0 && "control-plane".equals(role)) {
+            transport = new LaunchBulkheadDockerHttpClient(transport, launchSlots, launchWait);
+        }
         if (!"control-plane".equals(role)) {
             // The streaming transport replays only container waits, long-lived streams the call timeout never bounds.
             return RetryingDockerHttpClient.forContainerWaits(transport);

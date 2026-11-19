@@ -220,4 +220,16 @@ class ApplicationDefaultsTest {
         assertEquals("60", fallback.value(),
                 "the @WithDefault must match application.yml, which wins over it");
     }
+
+    // Catches: max-concurrent-launches missing from the shipped application.yml, or a yml value that
+    // silently disagrees with its @WithDefault fallback.
+    @Test
+    void productionConfigDeclaresTheContainerLaunchBoundAtItsDefault() throws IOException, NoSuchMethodException {
+        JsonNode launches = productionConfig().path("floci").path("docker").path("max-concurrent-launches");
+
+        assertFalse(launches.isMissingNode(), "max-concurrent-launches should be declared in application.yml");
+        assertEquals(0, launches.asInt(-1));
+        assertEquals("0", EmulatorConfig.DockerConfig.class.getMethod("maxConcurrentLaunches")
+                .getAnnotation(WithDefault.class).value(), "the @WithDefault must match application.yml");
+    }
 }

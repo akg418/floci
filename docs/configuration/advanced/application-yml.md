@@ -134,6 +134,7 @@ floci:
     max-connections: 1024                    # Docker client connection pool for short calls
     streaming-max-connections: 3072          # Separate pool for streams; each live Lambda container holds 2, plus 1 per extension
     pool-gauge-interval-seconds: 60          # Log Docker pool use every N seconds while a pool is busy; 0 = off
+    max-concurrent-launches: 0               # Most container creates and starts at once; 0 = twice the CPUs, at least 4
     docker-config-path: ""                   # Path to dir containing Docker's config.json (e.g. /root/.docker)
     registry-credentials: []                 # Per-registry explicit credentials for private registries
 
